@@ -36,27 +36,15 @@ redis:
 # Using a retry of -1 with a bug in your config can lead to bans by exchanges
 
 exchanges:
-    BITMEX:
+    KRAKEN_FUTURES:
         retries: -1
-        l2_book:
-            symbols: [XBTUSD]
-            max_depth: 10
-            book_delta: true
-        trades: [XBTUSD]
-        ticker: [XBTUSD]
-        funding: [XBTUSD]
-    COINBASE:
-        retries: -1
-        l3_book:
-            symbols: [BTC-USD, ETH-USD]
-            book_delta: true
-            book_interval: 10000
-        trades: [BTC-USD, ETH-USD, ETH-BTC]
-        ticker: [BTC-USD]
+        funding: [PI_XBTUSD]
+        open_interest: [PI_XBTUSD]
+
 
 
 # Where to store the data. Currently arctic, influx, elastic, and parquet are supported. More than one can be enabled
-storage: [arctic, influx]
+storage: [influx]
 
 # Configurable passthrough for data - data will be sent in realtime (no aggregation in redis)
 pass_through:
@@ -103,7 +91,7 @@ parquet:
 arctic: mongodb://127.0.0.1
 
 # Data batching window, in seconds
-storage_interval: 60
+storage_interval: 30
 
 
 # Cryptostore Plugin Interface

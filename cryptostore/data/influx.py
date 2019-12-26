@@ -7,7 +7,7 @@ associated with this software.
 from decimal import Decimal
 from collections import defaultdict
 
-from cryptofeed.defines import TRADES, L2_BOOK, L3_BOOK, TICKER, FUNDING
+from cryptofeed.defines import TRADES, L2_BOOK, L3_BOOK, TICKER, FUNDING, OPEN_INTEREST
 import requests
 
 from cryptostore.data.store import Store
@@ -31,11 +31,20 @@ class InfluxDB(Store):
         self.data = data
 
     def write(self, exchange, data_type, pair, timestamp):
+        """
+         syntax for writing data to influx:
+         measurement,tag1=value.tag2=value field1=value,field2=value,field3=value timestamp
+         where there can be an arbitrary number of tags and fields
+         Example:
+             ticker-BITMEX,pair=ETHUSD bid=128.8,ask=128.95,timestamp=1577201710.063 1577201710062999963
+         """
         if not self.data:
             return
         agg = []
-        # influx cant handle duplicate data (?!) so we need to
-        # incremement timestamps on data that have the same timestamp
+        # influx cant handle duplicate data (?!)  - if they share the same timestamp and tags
+        # executed market orders can split into many trades (sharing the same timestamp and tag==pair)
+        # so we need to increment timestamps on data that have the same timestamp
+        # ending up in 2 timestamps: an artificial one for indexing in influx and the original one as a field
         used_ts = defaultdict(set)
         if data_type == TRADES:
             for entry in self.data:
@@ -64,11 +73,12 @@ class InfluxDB(Store):
             for entry in self.data:
                 agg.append(f'{data_type}-{exchange},pair={pair},delta={entry["delta"]} side="{entry["side"]}",id="{entry["order_id"]}",timestamp={entry["timestamp"]},price="{entry["price"]}",amount="{entry["size"]}" {ts}')
                 ts += 1
-        elif data_type == FUNDING:
+        elif data_type == FUNDING or data_type == OPEN_INTEREST:
             for entry in self.data:
+                ts = int(Decimal(entry["timestamp"]) * 1000000000)  # TODO, as above
                 formatted = [f"{key}={value}" for key, value in entry.items() if isinstance(value, float)]
-                formatted = ','.join(formatted + [f'{key}="{value}"' for key, value in entry.items() if not isinstance(value, float)])
-                agg.append(f'{data_type}-{exchange},pair={pair} {formatted}')
+                formatted = ','.join(formatted + [f'{key}="{value}"' for key, value in entry.items() if (not isinstance(value, float) and not key == 'pair')])  # 'pair' is used as tag, not as field
+                agg.append(f'{data_type}-{exchange},pair={pair} {formatted} {ts}')
 
         for c in chunk(agg, 100000):
             c = '\n'.join(c)
