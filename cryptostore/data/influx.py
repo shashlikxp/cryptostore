@@ -41,15 +41,16 @@ class InfluxDB(Store):
         if not self.data:
             return
         agg = []
-        # influx cant handle duplicate data (?!)  - if they share the same timestamp and tags
+        # influx cant handle duplicate data (?!) - if they share the same timestamp and tags
         # executed market orders can split into many trades (sharing the same timestamp and tag==pair)
-        # so we need to increment timestamps on data that have the same timestamp
-        # ending up in 2 timestamps: an artificial one for indexing in influx and the original one as a field
+        # to store these trades individually, we increment timestamps on data that have the same timestamp
+        # resulting in 2 timestamps: an artificial one for indexing in influx and the original one as a field
+        # (alternatively, introducing a counter tag instead, could blow up indexing)
         used_ts = defaultdict(set)
         if data_type == TRADES:
             for entry in self.data:
                 ts = int(Decimal(entry["timestamp"]) * 1000000000)
-                while ts in used_ts[pair]:
+                while ts in used_ts[pair]:  # TODO: used_ts is not needed, because pair is unique (?!)
                     ts += 1
                 used_ts[pair].add(ts)
                 if 'id' in entry:
@@ -60,7 +61,7 @@ class InfluxDB(Store):
             for entry in self.data:
                 ts = int(Decimal(entry["timestamp"]) * 1000000000)
                 agg.append(f'{data_type}-{exchange},pair={pair} bid={entry["bid"]},ask={entry["ask"]},timestamp={entry["timestamp"]} {ts}')
-
+                ts += 1
         elif data_type == L2_BOOK:
             if len(self.data):
                 ts = int(Decimal(self.data[0]["timestamp"]) * 1000000000)
@@ -74,12 +75,16 @@ class InfluxDB(Store):
                 agg.append(f'{data_type}-{exchange},pair={pair},delta={entry["delta"]} side="{entry["side"]}",id="{entry["order_id"]}",timestamp={entry["timestamp"]},price="{entry["price"]}",amount="{entry["size"]}" {ts}')
                 ts += 1
         elif data_type == FUNDING or data_type == OPEN_INTEREST:
+            # funding data format can be different across exchanges, we pass all funding data and filter out data to be stored
             for entry in self.data:
-                ts = int(Decimal(entry["timestamp"]) * 1000000000)  # TODO, as above
-                formatted = [f"{key}={value}" for key, value in entry.items() if isinstance(value, float)]
-                formatted = ','.join(formatted + [f'{key}="{value}"' for key, value in entry.items() if (not isinstance(value, float) and not key == 'pair')])  # 'pair' is used as tag, not as field
+                ts = int(Decimal(entry["timestamp"]) * 1000000000)
+                tentry = {key:value for (key, value) in entry.items() if key not in ['pair', 'feed']}
+                    # 'pair' is already used (as tag, not as field)
+                    # 'feed' is the exchange name - does not need to be stored
+                formatted = [f"{key}={value}" for key, value in tentry.items() if isinstance(value, float)]
+                formatted = ','.join(formatted + [f'{key}="{value}"' for key, value in tentry.items() if (not isinstance(value, float))])
                 agg.append(f'{data_type}-{exchange},pair={pair} {formatted} {ts}')
-
+                ts += 1
         for c in chunk(agg, 100000):
             c = '\n'.join(c)
             r = requests.post(self.addr, data=c)
